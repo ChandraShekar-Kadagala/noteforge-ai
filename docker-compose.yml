@@ -1,0 +1,72 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: noteforge-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-noteforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-noteforge_dev_pwd}
+      POSTGRES_DB: ${POSTGRES_DB:-noteforge_db}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-noteforge} -d ${POSTGRES_DB:-noteforge_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - noteforge-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: noteforge-backend
+    environment:
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-noteforge}:${POSTGRES_PASSWORD:-noteforge_dev_pwd}@db:5432/${POSTGRES_DB:-noteforge_db}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DEBUG=${DEBUG:-True}
+      - SECRET_KEY=${SECRET_KEY:-dev_noteforge_super_secret_jwt_encryption_key_2026_x99a!}
+      - ALGORITHM=${ALGORITHM:-HS256}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://frontend:5173}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-flash}
+      - AI_MOCK_FALLBACK=${AI_MOCK_FALLBACK:-True}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - noteforge-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: noteforge-frontend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - noteforge-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  noteforge-network:
+    driver: bridge
