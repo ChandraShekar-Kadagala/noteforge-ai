@@ -51,7 +51,8 @@ async def preview_continuous_merge(
         document_id=doc.id,
         existing_sections=doc.sections,
         incoming_sections=organized_incoming.sections,
-        incoming_title=organized_incoming.title
+        incoming_title=organized_incoming.title,
+        detected_artefacts=organized_incoming.detected_artefacts
     )
 
 @router.post("/merge-commit/{document_id}", response_model=DocumentDetailOut)

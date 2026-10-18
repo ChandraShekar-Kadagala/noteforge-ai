@@ -143,3 +143,28 @@ export async function downloadExportFile(
   a.remove();
   window.URL.revokeObjectURL(downloadUrl);
 }
+
+export interface ImageUploadResult {
+  url: string;
+  filename: string;
+  width: number;
+  height: number;
+  format: string;
+  size_bytes: number;
+}
+
+export async function uploadImage(file: File): Promise<ImageUploadResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request<ImageUploadResult>('/upload/image', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export async function fetchExternalImage(url: string): Promise<ImageUploadResult> {
+  return request<ImageUploadResult>('/upload/fetch-external', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  });
+}

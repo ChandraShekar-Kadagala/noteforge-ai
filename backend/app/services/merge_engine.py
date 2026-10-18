@@ -80,7 +80,8 @@ def generate_merge_preview(
     document_id: str,
     existing_sections: List[DocumentSection],
     incoming_sections: List[ProposedSection],
-    incoming_title: str
+    incoming_title: str,
+    detected_artefacts: Optional[List[Dict[str, Any]]] = None
 ) -> MergePreviewResponse:
     analyzed_sections, dup_count = analyze_merge_candidates(existing_sections, incoming_sections)
 
@@ -92,6 +93,7 @@ def generate_merge_preview(
         existing_sections=serialized_existing,
         proposed_sections=analyzed_sections,
         potential_duplicates_count=dup_count,
+        detected_artefacts=detected_artefacts or [],
         summary_of_changes=summary,
         suggested_version_title=f"Merged: {incoming_title}"
     )

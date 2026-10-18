@@ -10,6 +10,7 @@ from app.routers.auth import router as auth_router
 from app.routers.documents import router as documents_router
 from app.routers.ai import router as ai_router
 from app.routers.export import router as export_router
+from app.routers.upload import router as upload_router
 from app.utils.logger import logger
 
 @asynccontextmanager
@@ -43,6 +44,7 @@ app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(ai_router)
 app.include_router(export_router)
+app.include_router(upload_router)
 
 @app.get("/api/health", tags=["Health"])
 def health_check(db: Session = Depends(get_db)):

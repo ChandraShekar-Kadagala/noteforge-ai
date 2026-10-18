@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { MergePreviewData, DocumentSection } from '../types/document';
-import { AlertTriangle, Check, X, Sparkles } from 'lucide-react';
+import { AlertTriangle, Check, X, Sparkles, ShieldCheck, ChevronDown, ChevronUp } from 'lucide-react';
 import { CodeBlock } from './CodeBlock';
 import { Callout } from './Callout';
 
@@ -25,6 +25,7 @@ export const MergePreviewModal: React.FC<MergePreviewModalProps> = ({
 
   const [versionTitle, setVersionTitle] = useState(previewData.suggested_version_title);
   const [changeSummary, setChangeSummary] = useState(previewData.summary_of_changes);
+  const [showArtefacts, setShowArtefacts] = useState(false);
   
   // Track user actions per proposed section key: 'append' | 'replace' | 'discard'
   const [decisions, setDecisions] = useState<{ [key: string]: 'append' | 'replace' | 'discard' }>(() => {
@@ -152,6 +153,44 @@ export const MergePreviewModal: React.FC<MergePreviewModalProps> = ({
               </span>
             )}
           </div>
+          {previewData.detected_artefacts && previewData.detected_artefacts.length > 0 && (
+            <div className="border border-emerald-200 dark:border-emerald-900/40 rounded-xl bg-emerald-50/40 dark:bg-emerald-950/20 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowArtefacts(!showArtefacts)}
+                className="w-full px-4 py-2.5 flex items-center justify-between text-left text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100/30 transition-colors"
+              >
+                <div className="flex items-center space-x-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>Document Intelligence Filtered {previewData.detected_artefacts.length} UI Artefact(s)</span>
+                </div>
+                {showArtefacts ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+              {showArtefacts && (
+                <div className="px-4 pb-3 pt-1 space-y-2 border-t border-emerald-200/50 dark:border-emerald-900/30 text-xs">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    The following interactive UI elements and line number gutters were detected and stripped to keep your technical study notes clean:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                    {previewData.detected_artefacts.map((art, aIdx) => (
+                      <div key={aIdx} className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800 text-[11px]">
+                        <div className="flex items-center justify-between font-mono text-[10px] text-slate-400 uppercase">
+                          <span>{art.type.replace('_', ' ')}</span>
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">{Math.round(art.confidence * 100)}% conf</span>
+                        </div>
+                        <div className="font-semibold text-slate-800 dark:text-slate-200 truncate mt-0.5">
+                          "{art.matched_text}"
+                        </div>
+                        <div className="text-slate-500 dark:text-slate-400 text-[10px] mt-0.5">
+                          {art.reason}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Proposed Sections List */}
           <div className="space-y-4">

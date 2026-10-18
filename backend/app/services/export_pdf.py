@@ -5,6 +5,7 @@ from xhtml2pdf import pisa
 from app.models.document import Document
 from fastapi import HTTPException, status
 from app.utils.logger import logger
+from app.services.media_resolver import resolve_image_data
 
 PDF_HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -13,9 +14,9 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
 <style>
     @page {
         size: letter portrait;
-        margin: 2cm;
+        margin: 1.8cm 1.8cm 2cm 1.8cm;
         @top-right {
-            content: "NoteForge AI";
+            content: "NoteForge AI  |  Study Notes";
             font-family: Helvetica, Arial, sans-serif;
             font-size: 8pt;
             color: #64748b;
@@ -29,50 +30,55 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
     }
     body {
         font-family: Helvetica, Arial, sans-serif;
-        font-size: 10pt;
+        font-size: 9.5pt;
         line-height: 1.5;
         color: #1e293b;
     }
     h1 {
-        font-size: 22pt;
+        font-size: 20pt;
         color: #0f172a;
+        margin-top: 0;
         margin-bottom: 4px;
         font-weight: bold;
+        page-break-after: avoid;
     }
     .subtitle {
-        font-size: 10pt;
+        font-size: 9pt;
         color: #64748b;
-        margin-bottom: 15px;
+        margin-bottom: 12px;
     }
     .summary-box {
         background-color: #f8fafc;
         border-left: 3px solid #6366f1;
         padding: 8px 12px;
-        margin-bottom: 20px;
+        margin-bottom: 16px;
         font-style: italic;
         color: #334155;
+        page-break-inside: avoid;
     }
     .divider {
         border-bottom: 1px solid #e2e8f0;
-        margin-bottom: 20px;
+        margin-bottom: 16px;
     }
     h2 {
-        font-size: 14pt;
-        color: #1e293b;
-        margin-top: 18px;
+        font-size: 13.5pt;
+        color: #0f172a;
+        margin-top: 16px;
         margin-bottom: 6px;
-        border-bottom: 1px solid #f1f5f9;
-        padding-bottom: 4px;
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 3px;
+        page-break-after: avoid;
     }
     h3 {
-        font-size: 11.5pt;
+        font-size: 11pt;
         color: #334155;
         margin-top: 10px;
         margin-bottom: 4px;
+        page-break-after: avoid;
     }
     p {
         margin-top: 0;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
     }
     ul, ol {
         margin-top: 2px;
@@ -87,9 +93,10 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         color: #e2e8f0;
         border-radius: 4px;
         padding: 8px 12px;
-        margin: 10px 0;
+        margin: 8px 0;
         font-family: 'Courier New', Courier, monospace;
-        font-size: 8.5pt;
+        font-size: 8pt;
+        page-break-inside: avoid;
     }
     .code-badge {
         color: #818cf8;
@@ -105,9 +112,10 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
     }
     .callout {
         padding: 8px 12px;
-        margin: 10px 0;
+        margin: 8px 0;
         border-left: 4px solid #3b82f6;
         background-color: #eff6ff;
+        page-break-inside: avoid;
     }
     .callout-warning {
         border-left-color: #ef4444;
@@ -117,28 +125,56 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         border-left-color: #10b981;
         background-color: #f0fdf4;
     }
+    .callout-info {
+        border-left-color: #64748b;
+        background-color: #f8fafc;
+    }
     .callout-title {
         font-weight: bold;
-        font-size: 9pt;
+        font-size: 8.5pt;
         margin-bottom: 2px;
+    }
+    .image-box {
+        text-align: center;
+        margin: 10px 0;
+        page-break-inside: avoid;
+    }
+    .image-box img {
+        max-width: 95%;
+        max-height: 420px;
+    }
+    .image-caption {
+        font-size: 7.5pt;
+        color: #64748b;
+        font-style: italic;
+        margin-top: 4px;
     }
     table.data-table {
         width: 100%;
         border-collapse: collapse;
-        margin: 10px 0;
-        font-size: 9pt;
+        margin: 8px 0;
+        font-size: 8.5pt;
+        page-break-inside: avoid;
     }
     table.data-table th {
         background-color: #f1f5f9;
         color: #1e293b;
         font-weight: bold;
-        padding: 6px 8px;
+        padding: 5px 8px;
         border: 1px solid #cbd5e1;
         text-align: left;
     }
     table.data-table td {
-        padding: 5px 8px;
+        padding: 4px 8px;
         border: 1px solid #e2e8f0;
+    }
+    blockquote {
+        border-left: 3px solid #cbd5e1;
+        margin: 6px 0;
+        padding-left: 10px;
+        color: #475569;
+        font-style: italic;
+        page-break-inside: avoid;
     }
 </style>
 </head>
@@ -152,6 +188,34 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+def render_markdown_table_html(table_lines: list) -> str:
+    parsed_rows = []
+    for line in table_lines:
+        line_clean = line.strip().strip("|")
+        if re.match(r"^[\s\-:|]+$", line_clean):
+            continue
+        cells = [c.strip() for c in line_clean.split("|")]
+        parsed_rows.append(cells)
+
+    if not parsed_rows:
+        return ""
+
+    num_cols = max(len(r) for r in parsed_rows)
+    out = ['<table class="data-table"><thead><tr>']
+    for c_idx in range(num_cols):
+        cell_txt = parsed_rows[0][c_idx] if c_idx < len(parsed_rows[0]) else ""
+        out.append(f"<th>{html.escape(cell_txt)}</th>")
+    out.append("</tr></thead><tbody>")
+
+    for r in parsed_rows[1:]:
+        out.append("<tr>")
+        for c_idx in range(num_cols):
+            cell_txt = r[c_idx] if c_idx < len(r) else ""
+            out.append(f"<td>{html.escape(cell_txt)}</td>")
+        out.append("</tr>")
+    out.append("</tbody></table>")
+    return "".join(out)
+
 def generate_pdf_stream(doc: Document) -> io.BytesIO:
     summary_html = ""
     if doc.summary:
@@ -163,20 +227,114 @@ def generate_pdf_stream(doc: Document) -> io.BytesIO:
         sec_parts = [f"<h2>{sec_title}</h2>"]
 
         if sec.content_markdown:
-            for line in sec.content_markdown.splitlines():
+            lines = sec.content_markdown.splitlines()
+            in_ul = False
+            in_ol = False
+            table_buffer = []
+
+            for line in lines:
                 l_str = line.strip()
-                if not l_str:
+
+                # Table line check
+                if l_str.startswith("|") and l_str.endswith("|"):
+                    if in_ul:
+                        sec_parts.append("</ul>")
+                        in_ul = False
+                    if in_ol:
+                        sec_parts.append("</ol>")
+                        in_ol = False
+                    table_buffer.append(l_str)
                     continue
+                else:
+                    if table_buffer:
+                        sec_parts.append(render_markdown_table_html(table_buffer))
+                        table_buffer = []
+
+                if not l_str:
+                    if in_ul:
+                        sec_parts.append("</ul>")
+                        in_ul = False
+                    if in_ol:
+                        sec_parts.append("</ol>")
+                        in_ol = False
+                    continue
+
+                # Markdown image: ![alt](url)
+                img_match = re.match(r"^!\[(.*?)\]\((.*?)\)$", l_str)
+                if img_match:
+                    if in_ul:
+                        sec_parts.append("</ul>")
+                        in_ul = False
+                    if in_ol:
+                        sec_parts.append("</ol>")
+                        in_ol = False
+                    alt_text = img_match.group(1)
+                    src_url = img_match.group(2)
+                    img_data = resolve_image_data(src_url)
+                    if img_data:
+                        _, _, data_uri, _, _ = img_data
+                        caption_html = f'<div class="image-caption">{html.escape(alt_text)}</div>' if alt_text else ""
+                        sec_parts.append(f'<div class="image-box"><img src="{data_uri}" />{caption_html}</div>')
+                        continue
+
+                # Headings
                 if l_str.startswith("#"):
+                    if in_ul:
+                        sec_parts.append("</ul>")
+                        in_ul = False
+                    if in_ol:
+                        sec_parts.append("</ol>")
+                        in_ol = False
                     sub_text = re.sub(r"^#+\s*", "", l_str)
                     sec_parts.append(f"<h3>{html.escape(sub_text)}</h3>")
+
+                # Bullet list
                 elif l_str.startswith("- ") or l_str.startswith("* "):
-                    sec_parts.append(f"<ul><li>{html.escape(l_str[2:])}</li></ul>")
+                    if in_ol:
+                        sec_parts.append("</ol>")
+                        in_ol = False
+                    if not in_ul:
+                        sec_parts.append("<ul>")
+                        in_ul = True
+                    sec_parts.append(f"<li>{html.escape(l_str[2:])}</li>")
+
+                # Numbered list
                 elif re.match(r"^\d+\.\s", l_str):
+                    if in_ul:
+                        sec_parts.append("</ul>")
+                        in_ul = False
+                    if not in_ol:
+                        sec_parts.append("<ol>")
+                        in_ol = True
                     num_text = re.sub(r"^\d+\.\s", "", l_str)
-                    sec_parts.append(f"<ol><li>{html.escape(num_text)}</li></ol>")
+                    sec_parts.append(f"<li>{html.escape(num_text)}</li>")
+
+                # Blockquote
+                elif l_str.startswith("> "):
+                    if in_ul:
+                        sec_parts.append("</ul>")
+                        in_ul = False
+                    if in_ol:
+                        sec_parts.append("</ol>")
+                        in_ol = False
+                    sec_parts.append(f"<blockquote>{html.escape(l_str[2:])}</blockquote>")
+
+                # Normal paragraph
                 else:
+                    if in_ul:
+                        sec_parts.append("</ul>")
+                        in_ul = False
+                    if in_ol:
+                        sec_parts.append("</ol>")
+                        in_ol = False
                     sec_parts.append(f"<p>{html.escape(l_str)}</p>")
+
+            if in_ul:
+                sec_parts.append("</ul>")
+            if in_ol:
+                sec_parts.append("</ol>")
+            if table_buffer:
+                sec_parts.append(render_markdown_table_html(table_buffer))
 
         for block in (sec.structured_blocks or []):
             b_type = block.get("type") if isinstance(block, dict) else block.type
@@ -219,6 +377,15 @@ def generate_pdf_stream(doc: Document) -> io.BytesIO:
                         tbl_html.append("</tr>")
                     tbl_html.append("</tbody></table>")
                     sec_parts.append("".join(tbl_html))
+
+            elif b_type == "image":
+                src_url = b_data.get("url", "")
+                alt_text = b_data.get("caption", "")
+                img_data = resolve_image_data(src_url)
+                if img_data:
+                    _, _, data_uri, _, _ = img_data
+                    caption_html = f'<div class="image-caption">{html.escape(alt_text)}</div>' if alt_text else ""
+                    sec_parts.append(f'<div class="image-box"><img src="{data_uri}" />{caption_html}</div>')
 
         sections_html.append("\n".join(sec_parts))
 

@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { DocumentSection, StructuredBlock } from '../types/document';
 import { CodeBlock } from './CodeBlock';
 import { Callout } from './Callout';
 import { ComparisonTable } from './ComparisonTable';
+import { MarkdownViewer } from './MarkdownViewer';
+import { EditorToolbar } from './EditorToolbar';
+import { uploadImage } from '../services/documents';
 import {
   Download,
   FileDown,
@@ -15,6 +18,8 @@ import {
   Check,
   Tag,
   Save,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 
 interface RichEditorProps {
@@ -30,6 +35,242 @@ interface RichEditorProps {
   onExportDocx: () => void;
   onExportPdf: () => void;
 }
+
+interface SectionRowProps {
+  section: DocumentSection;
+  idx: number;
+  isEditing: boolean;
+  onToggleEdit: () => void;
+  onTitleChange: (newTitle: string) => void;
+  onContentChange: (newContent: string) => void;
+  onDelete: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+}
+
+const SectionRow: React.FC<SectionRowProps> = ({
+  section,
+  idx,
+  isEditing,
+  onToggleEdit,
+  onTitleChange,
+  onContentChange,
+  onDelete,
+  onMoveUp,
+  onMoveDown,
+}) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [dragActive, setDragActive] = useState(false);
+
+  const handleDrop = async (e: React.DragEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+
+    for (const file of files) {
+      try {
+        const res = await uploadImage(file);
+        const alt = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+        const imgMd = `\n\n![${alt}](${res.url})\n\n`;
+        onContentChange(section.content_markdown + imgMd);
+      } catch (err: any) {
+        alert(`Failed to upload dropped image: ${err.message || 'Error'}`);
+      }
+    }
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imgItem = items.find(item => item.type.startsWith('image/'));
+    if (imgItem) {
+      const file = imgItem.getAsFile();
+      if (file) {
+        e.preventDefault();
+        try {
+          const res = await uploadImage(file);
+          const imgMd = `\n\n![Pasted Image](${res.url})\n\n`;
+          onContentChange(section.content_markdown + imgMd);
+        } catch (err: any) {
+          alert(`Failed to upload pasted image: ${err.message || 'Error'}`);
+        }
+      }
+    }
+  };
+
+  return (
+    <section
+      id={`sec-${section.stable_key}`}
+      className="group relative p-6 rounded-2xl border border-slate-200/90 dark:border-slate-800/90 bg-white dark:bg-slate-900 shadow-xs hover:border-slate-300 dark:hover:border-slate-700 transition-all"
+    >
+      {/* Section Header */}
+      <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex items-center space-x-3">
+          <span className="text-xs font-black px-2 py-0.5 rounded bg-brand-100 dark:bg-brand-900/40 text-brand-700 dark:text-brand-300">
+            {idx + 1}
+          </span>
+          {isEditing ? (
+            <input
+              type="text"
+              value={section.title}
+              onChange={e => onTitleChange(e.target.value)}
+              className="px-2 py-1 text-base font-bold rounded bg-slate-50 dark:bg-slate-800 border border-brand-500 focus:outline-none"
+            />
+          ) : (
+            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+              {section.title}
+            </h2>
+          )}
+        </div>
+
+        {/* Section Action Controls */}
+        <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {onMoveUp && (
+            <button
+              type="button"
+              onClick={onMoveUp}
+              className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+              title="Move section up"
+            >
+              <ChevronUp className="w-4 h-4" />
+            </button>
+          )}
+          {onMoveDown && (
+            <button
+              type="button"
+              onClick={onMoveDown}
+              className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+              title="Move section down"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onToggleEdit}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            title={isEditing ? 'View formatted preview' : 'Edit markdown and insert elements'}
+          >
+            {isEditing ? (
+              <span className="flex items-center space-x-1 text-xs font-semibold text-emerald-600">
+                <Check className="w-4 h-4" />
+                <span className="hidden sm:inline">Preview</span>
+              </span>
+            ) : (
+              <span className="flex items-center space-x-1 text-xs font-semibold">
+                <Edit2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Edit</span>
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            title="Delete section"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Section Content */}
+      {isEditing ? (
+        <div className="space-y-2">
+          <EditorToolbar
+            textareaRef={textareaRef}
+            content={section.content_markdown}
+            onChange={onContentChange}
+          />
+          <div className="relative">
+            <textarea
+              ref={textareaRef}
+              value={section.content_markdown}
+              onChange={e => onContentChange(e.target.value)}
+              onPaste={handlePaste}
+              onDragOver={e => {
+                e.preventDefault();
+                setDragActive(true);
+              }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={handleDrop}
+              rows={9}
+              placeholder="Write section markdown here... Paste or drag images directly into this area."
+              className={`w-full p-3.5 text-xs rounded-xl bg-slate-50 dark:bg-slate-800/80 border font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all ${
+                dragActive
+                  ? 'border-brand-500 ring-2 ring-brand-500/20 bg-brand-50/20'
+                  : 'border-slate-200 dark:border-slate-700'
+              }`}
+            />
+            {dragActive && (
+              <div className="absolute inset-0 flex items-center justify-center bg-brand-500/10 backdrop-blur-xs rounded-xl pointer-events-none text-xs font-bold text-brand-600">
+                Drop image to upload into section
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+            <span>Supports GFM Markdown, Tables, Images, and HTML tags</span>
+            <span>Paste or drag-and-drop images directly</span>
+          </div>
+        </div>
+      ) : (
+        <MarkdownViewer markdown={section.content_markdown} />
+      )}
+
+      {/* Structured Blocks (Code, Callouts, Tables, Images) */}
+      {section.structured_blocks && section.structured_blocks.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
+          {section.structured_blocks.map((block: StructuredBlock, bIdx: number) => {
+            if (block.type === 'code' && block.data.code) {
+              return (
+                <CodeBlock
+                  key={bIdx}
+                  language={block.data.language}
+                  code={block.data.code}
+                  expectedOutput={block.data.expected_output}
+                />
+              );
+            }
+            if (block.type === 'callout' && block.data.body) {
+              return (
+                <Callout
+                  key={bIdx}
+                  type={block.data.callout_type}
+                  title={block.data.title}
+                  body={block.data.body}
+                />
+              );
+            }
+            if (block.type === 'table') {
+              return (
+                <ComparisonTable
+                  key={bIdx}
+                  headers={block.data.headers}
+                  rows={block.data.rows}
+                />
+              );
+            }
+            if (block.type === 'image' && block.data.url) {
+              return (
+                <div key={bIdx} className="my-3 text-center">
+                  <img
+                    src={block.data.url}
+                    alt={block.data.caption || 'Illustration'}
+                    className="max-w-full md:max-w-lg mx-auto rounded-xl shadow-md border border-slate-200 dark:border-slate-800"
+                  />
+                  {block.data.caption && (
+                    <p className="mt-1 text-xs text-slate-500 italic">{block.data.caption}</p>
+                  )}
+                </div>
+              );
+            }
+            return null;
+          })}
+        </div>
+      )}
+    </section>
+  );
+};
 
 export const RichEditor: React.FC<RichEditorProps> = ({
   documentTitle,
@@ -78,6 +319,20 @@ export const RichEditor: React.FC<RichEditorProps> = ({
     if (window.confirm('Are you sure you want to remove this section?')) {
       const updated = sections.filter((_, i) => i !== idx);
       onUpdateSections(updated);
+      if (editingSectionIdx === idx) {
+        setEditingSectionIdx(null);
+      }
+    }
+  };
+
+  const handleMoveSection = (fromIdx: number, toIdx: number) => {
+    if (toIdx < 0 || toIdx >= sections.length) return;
+    const updated = [...sections];
+    const [moved] = updated.splice(fromIdx, 1);
+    updated.splice(toIdx, 0, moved);
+    onUpdateSections(updated.map((s, i) => ({ ...s, order_index: i })));
+    if (editingSectionIdx === fromIdx) {
+      setEditingSectionIdx(toIdx);
     }
   };
 
@@ -238,108 +493,20 @@ export const RichEditor: React.FC<RichEditorProps> = ({
             </button>
           </div>
         ) : (
-          sections.map((section, idx) => {
-            const isEditing = editingSectionIdx === idx;
-
-            return (
-              <section
-                key={section.stable_key || idx}
-                id={`sec-${section.stable_key}`}
-                className="group relative p-6 rounded-2xl border border-slate-200/90 dark:border-slate-800/90 bg-white dark:bg-slate-900 shadow-xs hover:border-slate-300 dark:hover:border-slate-700 transition-all"
-              >
-                {/* Section Header */}
-                <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-xs font-black px-2 py-0.5 rounded bg-brand-100 dark:bg-brand-900/40 text-brand-700 dark:text-brand-300">
-                      {idx + 1}
-                    </span>
-                    {isEditing ? (
-                      <input
-                        type="text"
-                        value={section.title}
-                        onChange={e => handleSectionTitleChange(idx, e.target.value)}
-                        className="px-2 py-1 text-base font-bold rounded bg-slate-50 dark:bg-slate-800 border border-brand-500 focus:outline-none"
-                      />
-                    ) : (
-                      <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                        {section.title}
-                      </h2>
-                    )}
-                  </div>
-
-                  {/* Section Controls */}
-                  <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => setEditingSectionIdx(isEditing ? null : idx)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                      title={isEditing ? 'Done editing' : 'Edit markdown directly'}
-                    >
-                      {isEditing ? <Check className="w-4 h-4 text-emerald-500" /> : <Edit2 className="w-4 h-4" />}
-                    </button>
-                    <button
-                      onClick={() => handleDeleteSection(idx)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                      title="Delete section"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Section Body */}
-                {isEditing ? (
-                  <textarea
-                    value={section.content_markdown}
-                    onChange={e => handleSectionContentChange(idx, e.target.value)}
-                    rows={8}
-                    className="w-full p-3 text-xs rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 font-mono text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  />
-                ) : (
-                  <div className="text-sm leading-relaxed text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
-                    {section.content_markdown}
-                  </div>
-                )}
-
-                {/* Structured Blocks: Code, Callouts, Tables */}
-                {section.structured_blocks && section.structured_blocks.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
-                    {section.structured_blocks.map((block: StructuredBlock, bIdx: number) => {
-                      if (block.type === 'code' && block.data.code) {
-                        return (
-                          <CodeBlock
-                            key={bIdx}
-                            language={block.data.language}
-                            code={block.data.code}
-                            expectedOutput={block.data.expected_output}
-                          />
-                        );
-                      }
-                      if (block.type === 'callout' && block.data.body) {
-                        return (
-                          <Callout
-                            key={bIdx}
-                            type={block.data.callout_type}
-                            title={block.data.title}
-                            body={block.data.body}
-                          />
-                        );
-                      }
-                      if (block.type === 'table') {
-                        return (
-                          <ComparisonTable
-                            key={bIdx}
-                            headers={block.data.headers}
-                            rows={block.data.rows}
-                          />
-                        );
-                      }
-                      return null;
-                    })}
-                  </div>
-                )}
-              </section>
-            );
-          })
+          sections.map((section, idx) => (
+            <SectionRow
+              key={section.stable_key || idx}
+              section={section}
+              idx={idx}
+              isEditing={editingSectionIdx === idx}
+              onToggleEdit={() => setEditingSectionIdx(editingSectionIdx === idx ? null : idx)}
+              onTitleChange={newTitle => handleSectionTitleChange(idx, newTitle)}
+              onContentChange={newContent => handleSectionContentChange(idx, newContent)}
+              onDelete={() => handleDeleteSection(idx)}
+              onMoveUp={idx > 0 ? () => handleMoveSection(idx, idx - 1) : undefined}
+              onMoveDown={idx < sections.length - 1 ? () => handleMoveSection(idx, idx + 1) : undefined}
+            />
+          ))
         )}
 
         {/* Add Section Button */}

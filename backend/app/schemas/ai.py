@@ -31,6 +31,7 @@ class OrganizeResponse(BaseModel):
     sections: List[ProposedSection]
     learning_objectives: List[str] = Field(default_factory=list)
     suggested_follow_ups: List[str] = Field(default_factory=list)
+    detected_artefacts: List[Dict[str, Any]] = Field(default_factory=list)
     provider_used: str = "mock"
 
 class MergePreviewRequest(BaseModel):
@@ -43,6 +44,7 @@ class MergePreviewResponse(BaseModel):
     existing_sections: List[SectionOut]
     proposed_sections: List[ProposedSection]
     potential_duplicates_count: int = 0
+    detected_artefacts: List[Dict[str, Any]] = Field(default_factory=list)
     summary_of_changes: str
     suggested_version_title: str
 

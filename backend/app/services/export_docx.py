@@ -8,6 +8,7 @@ from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 
 from app.models.document import Document
+from app.services.media_resolver import resolve_image_data
 
 def set_cell_background(cell, color_hex: str):
     """Sets background shading of a docx table cell."""
@@ -26,6 +27,44 @@ def set_cell_left_border(cell, color_hex: str, size: int = 24):
         f'</w:tcBorders>'
     )
     tcPr.append(tcBorders)
+
+def render_markdown_table_docx(docx: DocxDocument, table_lines: list):
+    if not table_lines or len(table_lines) < 2:
+        return
+    # Parse rows
+    parsed_rows = []
+    for line in table_lines:
+        line_clean = line.strip().strip("|")
+        # Skip markdown separator row |---|---|
+        if re.match(r"^[\s\-:|]+$", line_clean):
+            continue
+        cells = [c.strip() for c in line_clean.split("|")]
+        parsed_rows.append(cells)
+
+    if not parsed_rows:
+        return
+
+    num_cols = max(len(r) for r in parsed_rows)
+    tbl = docx.add_table(rows=len(parsed_rows), cols=num_cols)
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    for r_idx, row in enumerate(parsed_rows):
+        for c_idx in range(num_cols):
+            cell_text = row[c_idx] if c_idx < len(row) else ""
+            c = tbl.cell(r_idx, c_idx)
+            if r_idx == 0:
+                set_cell_background(c, "E2E8F0")
+            elif r_idx % 2 == 1:
+                set_cell_background(c, "F8FAFC")
+            p = c.paragraphs[0]
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(3)
+            r = p.add_run(cell_text)
+            r.font.name = "Arial"
+            r.font.size = Pt(9.5)
+            if r_idx == 0:
+                r.font.bold = True
+    docx.add_paragraph().paragraph_format.space_after = Pt(6)
 
 def generate_docx_stream(doc: Document) -> io.BytesIO:
     docx = DocxDocument()
@@ -97,18 +136,57 @@ def generate_docx_stream(doc: Document) -> io.BytesIO:
         h2.paragraph_format.space_after = Pt(6)
         h2_run = h2.add_run(f"{s_idx + 1}. {section.title}")
         h2_run.font.name = "Arial"
-        h2_run.font.size = Pt(16)
+        h2_run.font.size = Pt(15)
         h2_run.font.bold = True
         h2_run.font.color.rgb = RGBColor(15, 23, 42)
 
         # Markdown body
         if section.content_markdown:
-            # Simple markdown lines rendering
             lines = section.content_markdown.splitlines()
+            table_buffer = []
+
             for line in lines:
                 line_str = line.strip()
+                
+                # Check for table line
+                if line_str.startswith("|") and line_str.endswith("|"):
+                    table_buffer.append(line_str)
+                    continue
+                else:
+                    if table_buffer:
+                        render_markdown_table_docx(docx, table_buffer)
+                        table_buffer = []
+
                 if not line_str:
                     continue
+
+                # Image in markdown: ![alt](url)
+                img_match = re.match(r"^!\[(.*?)\]\((.*?)\)$", line_str)
+                if img_match:
+                    alt_text = img_match.group(1)
+                    src_url = img_match.group(2)
+                    img_data = resolve_image_data(src_url)
+                    if img_data:
+                        _, raw_bytes, _, w, h = img_data
+                        try:
+                            target_w = min(5.5, max(1.8, round(w / 110.0, 2)))
+                            p = docx.add_paragraph()
+                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            run = p.add_run()
+                            run.add_picture(io.BytesIO(raw_bytes), width=Inches(target_w))
+                            if alt_text:
+                                cp = docx.add_paragraph()
+                                cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                cp.paragraph_format.space_after = Pt(8)
+                                crun = cp.add_run(f"Figure: {alt_text}")
+                                crun.font.name = "Arial"
+                                crun.font.size = Pt(8.5)
+                                crun.font.italic = True
+                                crun.font.color.rgb = RGBColor(100, 116, 139)
+                            continue
+                        except Exception:
+                            pass
+
                 if line_str.startswith("#"):
                     # Sub-heading
                     subh = docx.add_paragraph()
@@ -116,7 +194,7 @@ def generate_docx_stream(doc: Document) -> io.BytesIO:
                     subh.paragraph_format.space_after = Pt(4)
                     subh_run = subh.add_run(re.sub(r"^#+\s*", "", line_str))
                     subh_run.font.name = "Arial"
-                    subh_run.font.size = Pt(12.5)
+                    subh_run.font.size = Pt(12)
                     subh_run.font.bold = True
                     subh_run.font.color.rgb = RGBColor(51, 65, 85)
                 elif line_str.startswith("- ") or line_str.startswith("* "):
@@ -131,6 +209,16 @@ def generate_docx_stream(doc: Document) -> io.BytesIO:
                     nrun = np.add_run(re.sub(r"^\d+\.\s", "", line_str))
                     nrun.font.name = "Arial"
                     nrun.font.size = Pt(10)
+                elif line_str.startswith("> "):
+                    # Blockquote / Note
+                    qp = docx.add_paragraph()
+                    qp.paragraph_format.left_indent = Inches(0.3)
+                    qp.paragraph_format.space_after = Pt(4)
+                    qrun = qp.add_run(line_str[2:])
+                    qrun.font.name = "Arial"
+                    qrun.font.italic = True
+                    qrun.font.size = Pt(9.5)
+                    qrun.font.color.rgb = RGBColor(71, 85, 105)
                 else:
                     p = docx.add_paragraph()
                     p.paragraph_format.space_after = Pt(6)
@@ -139,7 +227,10 @@ def generate_docx_stream(doc: Document) -> io.BytesIO:
                     prun.font.size = Pt(10)
                     prun.font.color.rgb = RGBColor(30, 41, 59)
 
-        # Structured Blocks (Code blocks, callouts, tables)
+            if table_buffer:
+                render_markdown_table_docx(docx, table_buffer)
+
+        # Structured Blocks (Code blocks, callouts, tables, images)
         for block in (section.structured_blocks or []):
             b_type = block.get("type") if isinstance(block, dict) else block.type
             b_data = block.get("data", {}) if isinstance(block, dict) else getattr(block, "data", {})
@@ -235,6 +326,29 @@ def generate_docx_stream(doc: Document) -> io.BytesIO:
                             r.font.size = Pt(9.5)
 
                     docx.add_paragraph().paragraph_format.space_after = Pt(6)
+
+            elif b_type == "image":
+                src_url = b_data.get("url", "")
+                alt_text = b_data.get("caption", "")
+                img_data = resolve_image_data(src_url)
+                if img_data:
+                    _, raw_bytes, _, w, _ = img_data
+                    try:
+                        target_w = min(5.5, max(1.8, round(w / 110.0, 2)))
+                        p = docx.add_paragraph()
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p.add_run().add_picture(io.BytesIO(raw_bytes), width=Inches(target_w))
+                        if alt_text:
+                            cp = docx.add_paragraph()
+                            cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            cp.paragraph_format.space_after = Pt(8)
+                            crun = cp.add_run(f"Figure: {alt_text}")
+                            crun.font.name = "Arial"
+                            crun.font.size = Pt(8.5)
+                            crun.font.italic = True
+                            crun.font.color.rgb = RGBColor(100, 116, 139)
+                    except Exception:
+                        pass
 
     # Save to memory stream
     output_stream = io.BytesIO()

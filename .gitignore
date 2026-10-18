@@ -61,6 +61,8 @@ postgres_data/
 *.sqlite3
 *.db
 
-# Temporary exports / logs
+# Temporary exports / logs / uploads
 exports/
 *.log
+uploads/
+backend/uploads/

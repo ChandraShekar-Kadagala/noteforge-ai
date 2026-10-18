@@ -1,6 +1,6 @@
 export interface StructuredBlock {
   id?: string;
-  type: 'callout' | 'code' | 'table' | 'procedure' | 'markdown';
+  type: 'callout' | 'code' | 'table' | 'procedure' | 'markdown' | 'image';
   data: {
     callout_type?: 'important' | 'warning' | 'tip' | 'info';
     title?: string;
@@ -12,6 +12,10 @@ export interface StructuredBlock {
     rows?: string[][];
     steps?: string[];
     markdown?: string;
+    url?: string;
+    caption?: string;
+    width?: string;
+    align?: 'left' | 'center' | 'right';
   };
 }
 
@@ -53,11 +57,19 @@ export interface ProposedSection extends DocumentSection {
   explanation?: string;
 }
 
+export interface DetectedArtefact {
+  type: string;
+  matched_text: string;
+  reason: string;
+  confidence: number;
+}
+
 export interface MergePreviewData {
   document_id: string;
   existing_sections: DocumentSection[];
   proposed_sections: ProposedSection[];
   potential_duplicates_count: number;
+  detected_artefacts?: DetectedArtefact[];
   summary_of_changes: string;
   suggested_version_title: string;
 }
