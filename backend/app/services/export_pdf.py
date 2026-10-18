@@ -1,9 +1,11 @@
 import io
 import html
 import re
+from typing import Optional
 from xhtml2pdf import pisa
-from app.models.document import Document
 from fastapi import HTTPException, status
+
+from app.models.document import Document
 from app.utils.logger import logger
 from app.services.media_resolver import resolve_image_data
 
@@ -80,6 +82,20 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         margin-top: 0;
         margin-bottom: 6px;
     }
+    strong, b {
+        font-weight: bold;
+        color: #0f172a;
+    }
+    em, i {
+        font-style: italic;
+    }
+    code {
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 8.5pt;
+        background-color: #f1f5f9;
+        color: #0f172a;
+        padding: 1px 3px;
+    }
     ul, ol {
         margin-top: 2px;
         margin-bottom: 8px;
@@ -109,6 +125,8 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         margin: 0;
         white-space: pre-wrap;
         word-break: break-all;
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 8pt;
     }
     .callout {
         padding: 8px 12px;
@@ -139,24 +157,21 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         margin: 10px 0;
         page-break-inside: avoid;
     }
-    .image-box img {
-        max-width: 95%;
-        max-height: 420px;
-    }
     .image-caption {
         font-size: 7.5pt;
         color: #64748b;
         font-style: italic;
         margin-top: 4px;
+        text-align: center;
     }
-    table.data-table {
+    table.data-table, table {
         width: 100%;
         border-collapse: collapse;
         margin: 8px 0;
         font-size: 8.5pt;
         page-break-inside: avoid;
     }
-    table.data-table th {
+    table.data-table th, table th {
         background-color: #f1f5f9;
         color: #1e293b;
         font-weight: bold;
@@ -164,7 +179,7 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         border: 1px solid #cbd5e1;
         text-align: left;
     }
-    table.data-table td {
+    table.data-table td, table td {
         padding: 4px 8px;
         border: 1px solid #e2e8f0;
     }
@@ -187,6 +202,49 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+def is_html_content(text: str) -> bool:
+    if not text:
+        return False
+    return bool(re.search(r"<(p|div|table|h[1-6]|ul|ol|li|blockquote|pre|img|strong|em|span)[^>]*>", text, re.IGNORECASE))
+
+def render_image_box(src: str, alt_text: str = "") -> str:
+    img_data = resolve_image_data(src)
+    if not img_data:
+        caption = html.escape(alt_text) if alt_text else "Illustration"
+        return f'<div class="image-box"><span class="image-caption">[Image: {caption}]</span></div>'
+    
+    _, _, data_uri, w, h = img_data
+    max_w = 480
+    max_h = 420
+    scale = min(max_w / max(w, 1), max_h / max(h, 1), 1.0)
+    disp_w = max(60, int(w * scale))
+    disp_h = max(40, int(h * scale))
+    caption_html = f'<div class="image-caption">{html.escape(alt_text)}</div>' if alt_text else ""
+    return f'<div class="image-box"><img src="{data_uri}" width="{disp_w}" height="{disp_h}" />{caption_html}</div>'
+
+def replace_html_images(html_text: str) -> str:
+    """Finds all <img ...> tags and replaces them with resolved data URI image boxes."""
+    def replacer(match):
+        tag = match.group(0)
+        src_match = re.search(r'src=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+        alt_match = re.search(r'alt=["\']([^"\']*)["\']', tag, re.IGNORECASE)
+        if not src_match:
+            return ""
+        src = src_match.group(1)
+        alt = alt_match.group(1) if alt_match else ""
+        return render_image_box(src, alt)
+
+    return re.sub(r'<img\b[^>]*\/?>', replacer, html_text, flags=re.IGNORECASE)
+
+def format_inline_markdown(text: str) -> str:
+    # Code `code`
+    text = re.sub(r"`([^`]+?)`", r"<code>\1</code>", text)
+    # Bold **text**
+    text = re.sub(r"\*\*([^*]+?)\*\*", r"<strong>\1</strong>", text)
+    # Italic *text*
+    text = re.sub(r"(?<!\*)\*([^*]+?)\*(?!\*)", r"<em>\1</em>", text)
+    return text
 
 def render_markdown_table_html(table_lines: list) -> str:
     parsed_rows = []
@@ -216,6 +274,126 @@ def render_markdown_table_html(table_lines: list) -> str:
     out.append("</tbody></table>")
     return "".join(out)
 
+def render_markdown_to_html(markdown_text: str) -> str:
+    lines = markdown_text.splitlines()
+    in_ul = False
+    in_ol = False
+    table_buffer = []
+    sec_parts = []
+
+    for line in lines:
+        l_str = line.strip()
+
+        # Table line check
+        if l_str.startswith("|") and l_str.endswith("|"):
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            table_buffer.append(l_str)
+            continue
+        else:
+            if table_buffer:
+                sec_parts.append(render_markdown_table_html(table_buffer))
+                table_buffer = []
+
+        if not l_str:
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            continue
+
+        # HTML image tag embedded in markdown: <img ...>
+        if "<img" in l_str.lower():
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            sec_parts.append(replace_html_images(l_str))
+            continue
+
+        # Markdown image: ![alt](url)
+        img_match = re.match(r"^!\[(.*?)\]\((.*?)\)$", l_str)
+        if img_match:
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            alt_text = img_match.group(1)
+            src_url = img_match.group(2)
+            sec_parts.append(render_image_box(src_url, alt_text))
+            continue
+
+        # Headings
+        if l_str.startswith("#"):
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            sub_text = re.sub(r"^#+\s*", "", l_str)
+            sec_parts.append(f"<h3>{html.escape(sub_text)}</h3>")
+
+        # Bullet list
+        elif l_str.startswith("- ") or l_str.startswith("* "):
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            if not in_ul:
+                sec_parts.append("<ul>")
+                in_ul = True
+            sec_parts.append(f"<li>{format_inline_markdown(html.escape(l_str[2:]))}</li>")
+
+        # Numbered list
+        elif re.match(r"^\d+\.\s", l_str):
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if not in_ol:
+                sec_parts.append("<ol>")
+                in_ol = True
+            num_text = re.sub(r"^\d+\.\s", "", l_str)
+            sec_parts.append(f"<li>{format_inline_markdown(html.escape(num_text))}</li>")
+
+        # Blockquote
+        elif l_str.startswith("> "):
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            sec_parts.append(f"<blockquote>{format_inline_markdown(html.escape(l_str[2:]))}</blockquote>")
+
+        # Normal paragraph
+        else:
+            if in_ul:
+                sec_parts.append("</ul>")
+                in_ul = False
+            if in_ol:
+                sec_parts.append("</ol>")
+                in_ol = False
+            sec_parts.append(f"<p>{format_inline_markdown(html.escape(l_str))}</p>")
+
+    if in_ul:
+        sec_parts.append("</ul>")
+    if in_ol:
+        sec_parts.append("</ol>")
+    if table_buffer:
+        sec_parts.append(render_markdown_table_html(table_buffer))
+
+    return "\n".join(sec_parts)
+
 def generate_pdf_stream(doc: Document) -> io.BytesIO:
     summary_html = ""
     if doc.summary:
@@ -227,114 +405,16 @@ def generate_pdf_stream(doc: Document) -> io.BytesIO:
         sec_parts = [f"<h2>{sec_title}</h2>"]
 
         if sec.content_markdown:
-            lines = sec.content_markdown.splitlines()
-            in_ul = False
-            in_ol = False
-            table_buffer = []
-
-            for line in lines:
-                l_str = line.strip()
-
-                # Table line check
-                if l_str.startswith("|") and l_str.endswith("|"):
-                    if in_ul:
-                        sec_parts.append("</ul>")
-                        in_ul = False
-                    if in_ol:
-                        sec_parts.append("</ol>")
-                        in_ol = False
-                    table_buffer.append(l_str)
-                    continue
-                else:
-                    if table_buffer:
-                        sec_parts.append(render_markdown_table_html(table_buffer))
-                        table_buffer = []
-
-                if not l_str:
-                    if in_ul:
-                        sec_parts.append("</ul>")
-                        in_ul = False
-                    if in_ol:
-                        sec_parts.append("</ol>")
-                        in_ol = False
-                    continue
-
-                # Markdown image: ![alt](url)
-                img_match = re.match(r"^!\[(.*?)\]\((.*?)\)$", l_str)
-                if img_match:
-                    if in_ul:
-                        sec_parts.append("</ul>")
-                        in_ul = False
-                    if in_ol:
-                        sec_parts.append("</ol>")
-                        in_ol = False
-                    alt_text = img_match.group(1)
-                    src_url = img_match.group(2)
-                    img_data = resolve_image_data(src_url)
-                    if img_data:
-                        _, _, data_uri, _, _ = img_data
-                        caption_html = f'<div class="image-caption">{html.escape(alt_text)}</div>' if alt_text else ""
-                        sec_parts.append(f'<div class="image-box"><img src="{data_uri}" />{caption_html}</div>')
-                        continue
-
-                # Headings
-                if l_str.startswith("#"):
-                    if in_ul:
-                        sec_parts.append("</ul>")
-                        in_ul = False
-                    if in_ol:
-                        sec_parts.append("</ol>")
-                        in_ol = False
-                    sub_text = re.sub(r"^#+\s*", "", l_str)
-                    sec_parts.append(f"<h3>{html.escape(sub_text)}</h3>")
-
-                # Bullet list
-                elif l_str.startswith("- ") or l_str.startswith("* "):
-                    if in_ol:
-                        sec_parts.append("</ol>")
-                        in_ol = False
-                    if not in_ul:
-                        sec_parts.append("<ul>")
-                        in_ul = True
-                    sec_parts.append(f"<li>{html.escape(l_str[2:])}</li>")
-
-                # Numbered list
-                elif re.match(r"^\d+\.\s", l_str):
-                    if in_ul:
-                        sec_parts.append("</ul>")
-                        in_ul = False
-                    if not in_ol:
-                        sec_parts.append("<ol>")
-                        in_ol = True
-                    num_text = re.sub(r"^\d+\.\s", "", l_str)
-                    sec_parts.append(f"<li>{html.escape(num_text)}</li>")
-
-                # Blockquote
-                elif l_str.startswith("> "):
-                    if in_ul:
-                        sec_parts.append("</ul>")
-                        in_ul = False
-                    if in_ol:
-                        sec_parts.append("</ol>")
-                        in_ol = False
-                    sec_parts.append(f"<blockquote>{html.escape(l_str[2:])}</blockquote>")
-
-                # Normal paragraph
-                else:
-                    if in_ul:
-                        sec_parts.append("</ul>")
-                        in_ul = False
-                    if in_ol:
-                        sec_parts.append("</ol>")
-                        in_ol = False
-                    sec_parts.append(f"<p>{html.escape(l_str)}</p>")
-
-            if in_ul:
-                sec_parts.append("</ul>")
-            if in_ol:
-                sec_parts.append("</ol>")
-            if table_buffer:
-                sec_parts.append(render_markdown_table_html(table_buffer))
+            content = sec.content_markdown.strip()
+            if is_html_content(content):
+                # Section content is rich HTML from the editor
+                processed_html = replace_html_images(content)
+                # Ensure table class
+                processed_html = re.sub(r'<table(?![^>]*class=)', '<table class="data-table"', processed_html, flags=re.IGNORECASE)
+                sec_parts.append(processed_html)
+            else:
+                # Section content is Markdown
+                sec_parts.append(render_markdown_to_html(content))
 
         for block in (sec.structured_blocks or []):
             b_type = block.get("type") if isinstance(block, dict) else block.type
@@ -381,11 +461,7 @@ def generate_pdf_stream(doc: Document) -> io.BytesIO:
             elif b_type == "image":
                 src_url = b_data.get("url", "")
                 alt_text = b_data.get("caption", "")
-                img_data = resolve_image_data(src_url)
-                if img_data:
-                    _, _, data_uri, _, _ = img_data
-                    caption_html = f'<div class="image-caption">{html.escape(alt_text)}</div>' if alt_text else ""
-                    sec_parts.append(f'<div class="image-box"><img src="{data_uri}" />{caption_html}</div>')
+                sec_parts.append(render_image_box(src_url, alt_text))
 
         sections_html.append("\n".join(sec_parts))
 

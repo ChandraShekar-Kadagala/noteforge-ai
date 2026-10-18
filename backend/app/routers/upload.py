@@ -4,14 +4,15 @@ import re
 import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, HttpUrl
+from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 import httpx
 from PIL import Image
 
 from app.config import settings
 from app.models.user import User
 from app.services.auth_service import get_current_user
+from app.services.storage_service import get_storage_service
 from app.utils.logger import logger
 
 router = APIRouter(tags=["Media & Uploads"])
@@ -23,11 +24,6 @@ ALLOWED_MIME_TYPES = {
     "image/webp": "webp",
     "image/gif": "gif"
 }
-
-def get_images_dir() -> str:
-    images_dir = os.path.join(settings.UPLOAD_DIR, "images")
-    os.makedirs(images_dir, exist_ok=True)
-    return images_dir
 
 class ImageUploadResponse(BaseModel):
     url: str
@@ -81,18 +77,17 @@ async def upload_image(
     token = uuid.uuid4().hex[:12]
     original_stem = os.path.splitext(file.filename or "image")[0]
     safe_stem = re.sub(r"[^a-zA-Z0-9_\-]", "", original_stem)[:24] or "img"
-    filename = f"{token}_{safe_stem}.{ext}"
+    target_filename = f"{token}_{safe_stem}.{ext}"
 
-    # Persist to disk
-    dest_path = os.path.join(get_images_dir(), filename)
-    with open(dest_path, "wb") as f:
-        f.write(contents)
+    # Persist via storage service
+    storage = get_storage_service()
+    saved_filename = storage.save_file(contents, target_filename, file.content_type.lower())
 
-    logger.info(f"Image uploaded successfully: {filename} ({len(contents)} bytes) by {current_user.email}")
+    logger.info(f"Image uploaded successfully: {saved_filename} ({len(contents)} bytes) by {current_user.email}")
 
     return ImageUploadResponse(
-        url=f"/api/media/{filename}",
-        filename=filename,
+        url=f"/api/media/{saved_filename}",
+        filename=saved_filename,
         width=width,
         height=height,
         format=img_format,
@@ -143,14 +138,15 @@ async def fetch_external_image(
 
     ext = "jpg" if img_format == "jpeg" else img_format
     token = uuid.uuid4().hex[:12]
-    filename = f"ext_{token}.{ext}"
-    dest_path = os.path.join(get_images_dir(), filename)
-    with open(dest_path, "wb") as f:
-        f.write(contents)
+    target_filename = f"ext_{token}.{ext}"
+    
+    storage = get_storage_service()
+    content_type = f"image/{ext}"
+    saved_filename = storage.save_file(contents, target_filename, content_type)
 
     return ImageUploadResponse(
-        url=f"/api/media/{filename}",
-        filename=filename,
+        url=f"/api/media/{saved_filename}",
+        filename=saved_filename,
         width=width,
         height=height,
         format=img_format,
@@ -163,10 +159,8 @@ async def get_media_file(filename: str):
     if os.path.basename(filename) != filename or ".." in filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename.")
 
-    file_path = os.path.join(get_images_dir(), filename)
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image not found.")
-
+    storage = get_storage_service()
+    
     ext = os.path.splitext(filename)[1].lower().lstrip(".")
     mime_type = "image/png"
     if ext in ["jpg", "jpeg"]:
@@ -176,8 +170,20 @@ async def get_media_file(filename: str):
     elif ext == "gif":
         mime_type = "image/gif"
 
-    return FileResponse(
-        path=file_path,
+    local_path = storage.get_local_path(filename)
+    if local_path and os.path.isfile(local_path):
+        return FileResponse(
+            path=local_path,
+            media_type=mime_type,
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
+
+    file_bytes = storage.get_file_bytes(filename)
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image not found.")
+
+    return Response(
+        content=file_bytes,
         media_type=mime_type,
         headers={"Cache-Control": "public, max-age=86400"}
     )

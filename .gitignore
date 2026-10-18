@@ -66,3 +66,4 @@ exports/
 *.log
 uploads/
 backend/uploads/
+scratch/

@@ -147,3 +147,69 @@ Key points:
     assert pdf_res.status_code == 200
     assert pdf_res.content.startswith(b"%PDF")
     assert len(pdf_res.content) > 2000
+
+def test_export_with_tiptap_html_and_images(client, auth_headers):
+    # Upload test image
+    from tests.test_upload import generate_test_image_bytes
+    img_bytes = generate_test_image_bytes(format="JPEG", width=200, height=120)
+    upload_res = client.post(
+        "/api/upload/image",
+        files={"file": ("screenshot.jpg", img_bytes, "image/jpeg")},
+        headers=auth_headers
+    )
+    assert upload_res.status_code == 200
+    media_url = upload_res.json()["url"]
+
+    # Create document
+    create_res = client.post("/api/documents", headers=auth_headers, json={
+        "title": "TipTap Editor Integration Guide",
+        "subject": "Frontend Engineering"
+    })
+    doc_id = create_res.json()["id"]
+
+    # TipTap WYSIWYG HTML containing images, styled tables, code blocks, and blockquotes
+    tiptap_html = f"""
+    <p>This is a <strong>Google Docs-style</strong> white paper document editor.</p>
+    <p>Below is the system architecture screenshot:</p>
+    <p><img src="{media_url}" alt="Architecture Diagram" /></p>
+    <table>
+      <thead>
+        <tr><th>Layer</th><th>Technology</th><th>Responsibility</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Editor</td><td>TipTap / ProseMirror</td><td>WYSIWYG Rich Text Editing</td></tr>
+        <tr><td>Storage</td><td>FastAPI + PostgreSQL</td><td>Multi-tenant persistence</td></tr>
+      </tbody>
+    </table>
+    <blockquote>TipTap provides high-precision cursor control and undo/redo history.</blockquote>
+    <pre><code>function initializeEditor() {{ return new Editor(); }}</code></pre>
+    """
+
+    sections = [
+        {
+            "stable_key": "tiptap_core",
+            "title": "Editor Architecture",
+            "section_type": "concept",
+            "order_index": 0,
+            "content_markdown": tiptap_html.strip(),
+            "structured_blocks": [],
+            "ai_enriched": False
+        }
+    ]
+
+    client.post(f"/api/ai/merge-commit/{doc_id}", headers=auth_headers, json={
+        "version_title": "Lesson: TipTap Integration",
+        "sections": sections
+    })
+
+    # Test DOCX Export
+    docx_res = client.get(f"/api/export/{doc_id}/docx", headers=auth_headers)
+    assert docx_res.status_code == 200
+    assert len(docx_res.content) > 2000
+
+    # Test PDF Export
+    pdf_res = client.get(f"/api/export/{doc_id}/pdf", headers=auth_headers)
+    assert pdf_res.status_code == 200
+    assert pdf_res.content.startswith(b"%PDF")
+    assert len(pdf_res.content) > 2000
+

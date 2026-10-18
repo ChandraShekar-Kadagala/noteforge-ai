@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # Upload & Media settings
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_BYTES: int = 5 * 1024 * 1024  # 5 MB
+    STORAGE_BACKEND: str = "local"  # "local", "s3", or "supabase"
+    S3_ENDPOINT_URL: str = ""
+    S3_BUCKET_NAME: str = ""
+    S3_ACCESS_KEY: str = ""
+    S3_SECRET_KEY: str = ""
+    S3_REGION: str = "us-east-1"
+    SUPABASE_STORAGE_BUCKET: str = "noteforge-media"
     
     @property
     def cors_origin_list(self) -> List[str]:

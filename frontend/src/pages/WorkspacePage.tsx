@@ -71,9 +71,13 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
   // Section selection from outline
   const handleSelectSection = (key: string) => {
     setActiveSectionKey(key);
-    const element = document.getElementById(`sec-${key}`);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const section = doc?.sections.find(s => s.stable_key === key);
+    if (section) {
+      const headings = Array.from(document.querySelectorAll('.ProseMirror h1, .ProseMirror h2, .ProseMirror h3'));
+      const target = headings.find(h => h.textContent?.includes(section.title));
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
     }
     setActiveTab('editor');
   };
@@ -125,6 +129,29 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
     setDoc(updated);
     setSaveStatus('saved');
   };
+
+  // Debounced autosave effect
+  useEffect(() => {
+    if (saveStatus !== 'unsaved' || !doc) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setSaveStatus('saving');
+        const updated = await docService.commitMerge(doc.id, {
+          version_title: `Autosave v${doc.current_version + 1}`,
+          change_summary: `Autosaved document edits`,
+          sections: doc.sections,
+        });
+        setDoc(updated);
+        setSaveStatus('saved');
+      } catch (err) {
+        console.warn('Autosave background error:', err);
+        setSaveStatus('unsaved');
+      }
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [doc?.sections, saveStatus]);
 
   // Manual save
   const handleManualSave = async () => {
@@ -296,6 +323,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
             onOpenVersions={handleOpenVersions}
             onExportDocx={handleExportDocx}
             onExportPdf={handleExportPdf}
+            saveStatus={saveStatus}
           />
         </div>
 

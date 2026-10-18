@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 from PIL import Image
 
 from app.config import settings
+from app.services.storage_service import get_storage_service
 from app.utils.logger import logger
 
 def resolve_image_data(src: str) -> Optional[Tuple[str, bytes, str, int, int]]:
@@ -34,15 +35,16 @@ def resolve_image_data(src: str) -> Optional[Tuple[str, bytes, str, int, int]]:
                 w, h = img.size
                 return mime_type, raw_bytes, src, w, h
 
-        # Case 2: Local uploaded media URL /api/media/{filename}
-        if "/api/media/" in src:
-            filename = src.split("/api/media/")[-1].split("?")[0]
-            # Strip path traversal characters
+        # Case 2: Media URL /api/media/{filename} or /uploads/{filename}
+        if "/api/media/" in src or "/uploads/" in src:
+            if "/api/media/" in src:
+                filename = src.split("/api/media/")[-1].split("?")[0]
+            else:
+                filename = src.split("/uploads/")[-1].split("?")[0]
             safe_filename = os.path.basename(filename)
-            file_path = os.path.join(settings.UPLOAD_DIR, "images", safe_filename)
-            if os.path.isfile(file_path):
-                with open(file_path, "rb") as f:
-                    raw_bytes = f.read()
+            storage = get_storage_service()
+            raw_bytes = storage.get_file_bytes(safe_filename)
+            if raw_bytes:
                 img = Image.open(io.BytesIO(raw_bytes))
                 w, h = img.size
                 fmt = (img.format or "PNG").lower()
@@ -51,7 +53,24 @@ def resolve_image_data(src: str) -> Optional[Tuple[str, bytes, str, int, int]]:
                 data_uri = f"data:{mime_type};base64,{b64}"
                 return mime_type, raw_bytes, data_uri, w, h
 
-        # Case 3: Direct local file path
+        # Case 3: Remote URL (http:// or https://)
+        if src.startswith("http://") or src.startswith("https://"):
+            try:
+                import httpx
+                resp = httpx.get(src, timeout=6.0, follow_redirects=True)
+                if resp.status_code == 200 and resp.content:
+                    raw_bytes = resp.content
+                    img = Image.open(io.BytesIO(raw_bytes))
+                    w, h = img.size
+                    fmt = (img.format or "PNG").lower()
+                    mime_type = f"image/{fmt}"
+                    b64 = base64.b64encode(raw_bytes).decode("ascii")
+                    data_uri = f"data:{mime_type};base64,{b64}"
+                    return mime_type, raw_bytes, data_uri, w, h
+            except Exception as net_err:
+                logger.warning(f"Failed to fetch remote image '{src}': {net_err}")
+
+        # Case 4: Direct local file path
         if os.path.isfile(src):
             with open(src, "rb") as f:
                 raw_bytes = f.read()
